@@ -1,0 +1,71 @@
+/* Intent Modal Overlay */
+.cp-modal-overlay {
+    position: fixed;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0, 0, 0, 0.7);
+    z-index: 999998;
+}
+
+/* Modal Box */
+.cp-modal-content {
+    position: fixed;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: 450px;
+    background: #fff;
+    padding: 20px;
+    z-index: 999999;
+    box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+    border-radius: 4px;
+}
+
+.cp-modal-header h1 {
+    margin: 0 0 15px 0;
+    font-size: 18px;
+}
+
+.cp-modal-body textarea {
+    width: 100%;
+    margin: 15px 0;
+    font-family: monospace;
+}
+
+.cp-investigation-badge {
+    background: #e7f3ff;
+    color: #0073aa;
+    padding: 8px;
+    border-radius: 3px;
+    font-size: 12px;
+    border-left: 4px solid #0073aa;
+}
+
+.cp-modal-footer {
+    text-align: right;
+    margin-top: 20px;
+}
+
+/* Timeline specific styles */
+.cp-diff-excerpt {
+    font-family: monospace;
+    font-size: 11px;
+    background: #f6f7f7;
+    padding: 5px;
+    border: 1px solid #dcdcde;
+    max-height: 100px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+}
+
+#cp-intent-modal {
+    display: flex !important; /* Overrides WP display:none if needed */
+    align-items: center;
+    justify-content: center;
+}
+
+#cp-intent-modal:not([style*="display: block"]):not([style*="display: block"]) {
+    display: none !important; /* Ensure it stays hidden until JS shows it */
+}
+
+.cp-modal-content * {
+    pointer-events: auto !important; /* Ensure children are clickable */
+}
