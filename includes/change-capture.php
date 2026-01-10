@@ -1,98 +1,145 @@
 <?php
 /**
- * Change Capture Engine
+ * Change Capture Logic
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
 /**
- * AJAX Handler: Store Intent
+ * -------------------------------------------------
+ * AJAX: Save Intent (per-save)
+ * -------------------------------------------------
  */
-add_action( 'wp_ajax_cp_submit_intent', 'cp_handle_ajax_intent' );
-function cp_handle_ajax_intent() {
+add_action( 'wp_ajax_cp_submit_intent', 'cp_ajax_submit_intent' );
+function cp_ajax_submit_intent() {
     check_ajax_referer( 'cp_intent_nonce', 'security' );
 
-    if ( ! current_user_can( 'edit_posts' ) ) {
-        wp_send_json_error( 'Permission denied' );
-    }
-
     $reason = isset( $_POST['reason'] ) ? sanitize_text_field( $_POST['reason'] ) : '';
-    
-    // Crucial: Clear any old intent first
-    delete_user_meta( get_current_user_id(), '_cp_pending_intent' );
-    
-    // Store new intent
-    $stored = update_user_meta( get_current_user_id(), '_cp_pending_intent', $reason );
-
-    if ( $stored ) {
-        wp_send_json_success();
-    } else {
-        // Even if update_user_meta returns false (because the value didn't change), 
-        // we should still succeed if the reason is there.
-        wp_send_json_success();
+    if ( strlen( $reason ) < 5 ) {
+        wp_send_json_error( 'Intent too short.' );
     }
+
+    update_user_meta(
+        get_current_user_id(),
+        '_cp_pending_intent',
+        $reason
+    );
+
+    wp_send_json_success();
 }
 
 /**
- * Core Capture Hook
+ * -------------------------------------------------
+ * CORE RECORDER (single source of truth)
+ * -------------------------------------------------
  */
-add_action( 'post_updated', 'cp_capture_post_update', 10, 3 );
-function cp_capture_post_update( $post_ID, $post_after, $post_before ) {
-    // 1. Safety Checks
-    if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) return;
-    if ( wp_is_post_revision( $post_ID ) ) return;
-    
-    // 2. Hash Comparison (Did anything actually change?)
-    $old_content = $post_before->post_title . $post_before->post_content;
-    $new_content = $post_after->post_title . $post_after->post_content;
-    
-    $old_hash = hash( 'sha256', $old_content );
-    $new_hash = hash( 'sha256', $new_content );
-
-    if ( $old_hash === $new_hash ) {
-        // No meaningful change to record.
-        return;
-    }
-
-    // 3. Retrieve Intent
-    $user_id = get_current_user_id();
-    // Use a direct database query for the meta to bypass any cache issues
-    $intent = get_user_meta( $user_id, '_cp_pending_intent', true );
-
-    // If no intent found, check if we are in an active investigation
-    $investigation_id = cp_get_active_investigation_id( $user_id );
-
-    if ( empty( $intent ) && ! $investigation_id ) {
-        // Log this to wp-content/debug.log if enabled
-        error_log("Changeproof: Post $post_ID updated but no intent or active investigation found.");
-        return;
-    }
-
-    // 4. Insert into Database
+function cp_record_change( array $args ) {
     global $wpdb;
-    $table = $wpdb->prefix . 'cp_changes';
 
-    $result = $wpdb->insert(
-        $table,
-        [
-            'investigation_id' => $investigation_id ? $investigation_id : null,
-            'user_id'          => $user_id,
-            'object_type'      => 'post',
-            'object_id'        => (string)$post_ID,
-            'change_type'      => 'update',
-            'before_data'      => $old_content,
-            'after_data'       => $new_content,
-            'reason'           => !empty($intent) ? $intent : __('Active Investigation Session', 'changeproof'),
-            'hash'             => $new_hash,
-            'created_at'       => current_time( 'mysql' )
-        ],
-        [ '%d', '%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s' ]
-    );
+    $defaults = [
+        'investigation_id' => null,
+        'user_id'          => get_current_user_id(),
+        'object_type'      => '',
+        'object_id'        => '',
+        'change_type'      => 'update',
+        'before_data'      => null,
+        'after_data'       => null,
+        'reason'           => null,
+        'hash'             => null,
+        'created_at'       => current_time( 'mysql' ),
+    ];
 
-    if ( false === $result ) {
-        error_log( "Changeproof Database Error: " . $wpdb->last_error );
-    } else {
-        // Success! Clean up the intent for the next save
-        delete_user_meta( $user_id, '_cp_pending_intent' );
+    $data = wp_parse_args( $args, $defaults );
+
+    // Hard stop if object is not defined
+    if ( empty( $data['object_type'] ) || empty( $data['object_id'] ) ) {
+        return;
     }
+
+    $wpdb->insert(
+        $wpdb->prefix . 'cp_changes',
+        $data
+    );
+}
+
+/**
+ * -------------------------------------------------
+ * UNIVERSAL POST CAPTURE
+ * Handles Gutenberg, Classic, REST, Quick Edit
+ * -------------------------------------------------
+ */
+add_action( 'save_post', 'cp_capture_post_change', 100, 3 );
+function cp_capture_post_change( $post_id, $post, $update ) {
+
+    // Safety guards
+    if ( ! $update ) return;
+    if ( wp_is_post_revision( $post_id ) ) return;
+    if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) return;
+    if ( ! $post instanceof WP_Post ) return;
+
+    $user_id = get_current_user_id();
+
+    // Respect excluded post types
+    $excluded = (array) get_option( 'cp_excluded_post_types', [] );
+    if ( in_array( $post->post_type, $excluded, true ) ) {
+        return;
+    }
+
+    // Fetch intent + investigation
+    $intent        = get_user_meta( $user_id, '_cp_pending_intent', true );
+    $investigation = cp_get_active_investigation_id( $user_id );
+
+    // Nothing to log
+    if ( ! $intent && ! $investigation ) {
+        return;
+    }
+
+    // Build snapshot (v1 = after only)
+    $content = [
+        'title'   => $post->post_title,
+        'content' => $post->post_content,
+        'status'  => $post->post_status,
+    ];
+
+    $serialized = wp_json_encode( $content );
+
+    cp_record_change( [
+        'investigation_id' => $investigation,
+        'user_id'          => $user_id,
+        'object_type'      => $post->post_type,   // ← FIXED
+        'object_id'        => (string) $post_id,
+        'change_type'      => 'update',
+        'after_data'       => $serialized,
+        'reason'           => $intent ?: __( 'Investigation mode active', 'changeproof' ),
+        'hash'             => md5( $serialized ),
+    ] );
+
+    // 🔥 CRITICAL: intent is one-time only
+    delete_user_meta( $user_id, '_cp_pending_intent' );
+}
+
+/**
+ * -------------------------------------------------
+ * PLUGIN ACTIVATION / DEACTIVATION
+ * (System changes – bypass intent)
+ * -------------------------------------------------
+ */
+add_action( 'activated_plugin', 'cp_capture_plugin_activation', 10, 1 );
+function cp_capture_plugin_activation( $plugin ) {
+    cp_record_change( [
+        'object_type' => 'plugin',
+        'object_id'   => $plugin,
+        'change_type' => 'activate',
+        'reason'      => __( 'Plugin activated', 'changeproof' ),
+    ] );
+}
+
+add_action( 'deactivated_plugin', 'cp_capture_plugin_deactivation', 10, 1 );
+function cp_capture_plugin_deactivation( $plugin ) {
+    cp_record_change( [
+        'object_type' => 'plugin',
+        'object_id'   => $plugin,
+        'change_type' => 'deactivate',
+        'reason'      => __( 'Plugin deactivated', 'changeproof' ),
+    ] );
 }

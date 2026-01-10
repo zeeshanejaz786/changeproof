@@ -1,125 +1,133 @@
 <?php
-/**
- * Investigation Mode Logic
- */
-
-if ( ! defined( 'ABSPATH' ) ) {
-	exit;
-}
+if ( ! defined( 'ABSPATH' ) ) exit;
 
 /**
- * 1. CORE LOGIC FUNCTIONS
- */
-
-/**
- * Get the current active investigation ID for a specific user.
+ * Returns active investigation ID for a user, auto-expiring after 24 hours.
  */
 function cp_get_active_investigation_id( $user_id ) {
-	$active_id = get_user_meta( $user_id, '_cp_active_investigation', true );
-	return ( $active_id ) ? (int) $active_id : false;
+    $active_id = get_user_meta( $user_id, '_cp_active_investigation', true );
+    if ( ! $active_id ) return false;
+
+    global $wpdb;
+    $row = $wpdb->get_row( $wpdb->prepare(
+        "SELECT id, start_time FROM {$wpdb->prefix}cp_investigations WHERE id = %d LIMIT 1",
+        $active_id
+    ));
+
+    // Orphaned user_meta?
+    if ( ! $row ) {
+        delete_user_meta( $user_id, '_cp_active_investigation' );
+        return false;
+    }
+
+    // Auto-expire
+    if ( strtotime( $row->start_time ) < strtotime( '-24 hours' ) ) {
+        cp_end_investigation( $user_id, 'expired', __('Auto-closed after 24 hours.', 'changeproof') );
+        return false;
+    }
+
+    return (int) $row->id;
 }
 
 /**
- * Start a new investigation for a user.
+ * Start an investigation
  */
-function cp_start_investigation( $user_id, $data ) {
-	global $wpdb;
+function cp_start_investigation( $user_id, $note = '' ) {
+    if ( cp_get_active_investigation_id( $user_id ) ) return false;
 
-	if ( cp_get_active_investigation_id( $user_id ) ) {
-		return new WP_Error( 'cp_already_active', __( 'An active investigation is already running.', 'changeproof' ) );
-	}
+    global $wpdb;
+    $inserted = $wpdb->insert(
+        $wpdb->prefix . 'cp_investigations',
+        [
+            'user_id'      => $user_id,
+            'start_time'   => current_time( 'mysql' ),
+            'status'       => 'active',
+            'initial_note' => sanitize_textarea_field( $note )
+        ]
+    );
 
-	$table = $wpdb->prefix . 'cp_investigations';
-	
-	$inserted = $wpdb->insert(
-		$table,
-		[
-			'user_id'      => $user_id,
-			'start_time'   => current_time( 'mysql' ),
-			'status'       => 'active',
-			'initial_note' => sanitize_textarea_field( $data['initial_note'] )
-		],
-		[ '%d', '%s', '%s', '%s' ]
-	);
+    if ( ! $inserted ) return false;
 
-	if ( false === $inserted ) {
-		return new WP_Error( 'db_error', __( 'Database error.', 'changeproof' ) );
-	}
+    $id = $wpdb->insert_id;
+    update_user_meta( $user_id, '_cp_active_investigation', $id );
 
-	$investigation_id = $wpdb->insert_id;
-	update_user_meta( $user_id, '_cp_active_investigation', $investigation_id );
-
-	return $investigation_id;
+    return $id;
 }
 
 /**
- * End an active investigation.
+ * End an investigation
  */
-function cp_end_investigation( $user_id, $status, $note ) {
-	global $wpdb;
-	$active_id = cp_get_active_investigation_id( $user_id );
+function cp_end_investigation( $user_id, $status = 'completed', $note = '' ) {
+    $active_id = cp_get_active_investigation_id( $user_id );
+    if ( ! $active_id ) return false;
 
-	if ( ! $active_id ) return false;
+    global $wpdb;
+    $updated = $wpdb->update(
+        $wpdb->prefix . 'cp_investigations',
+        [
+            'end_time'   => current_time( 'mysql' ),
+            'status'     => sanitize_text_field( $status ),
+            'final_note' => sanitize_textarea_field( $note )
+        ],
+        [ 'id' => $active_id ]
+    );
 
-	$wpdb->update(
-		$wpdb->prefix . 'cp_investigations',
-		[
-			'end_time'   => current_time( 'mysql' ),
-			'status'     => sanitize_text_field( $status ),
-			'final_note' => sanitize_textarea_field( $note )
-		],
-		[ 'id' => $active_id ]
-	);
+    delete_user_meta( $user_id, '_cp_active_investigation' );
 
-	delete_user_meta( $user_id, '_cp_active_investigation' );
-	return true;
+    return (bool) $updated;
 }
 
 /**
- * 2. UI CONTROLLER
+ * Render Investigation UI
  */
 function cp_render_investigations_page() {
-	if ( ! current_user_can( 'manage_options' ) ) {
-		wp_die( __( 'Unauthorized.', 'changeproof' ) );
-	}
+    if ( ! current_user_can( 'manage_options' ) ) wp_die( __('Unauthorized.', 'changeproof') );
 
-	global $wpdb;
-	$user_id = get_current_user_id();
-	$active_id = cp_get_active_investigation_id( $user_id );
-	
-	$history = $wpdb->get_results( $wpdb->prepare(
-		"SELECT * FROM {$wpdb->prefix}cp_investigations WHERE user_id = %d ORDER BY start_time DESC",
-		$user_id
-	));
+    global $wpdb;
+    $user_id   = get_current_user_id();
+    $active_id = cp_get_active_investigation_id( $user_id );
 
-	include CP_PATH . 'templates/investigations-ui.php';
+    // History: current user only for now
+    $history = $wpdb->get_results( $wpdb->prepare(
+        "SELECT * FROM {$wpdb->prefix}cp_investigations WHERE user_id = %d ORDER BY start_time DESC LIMIT 50",
+        $user_id
+    ));
+
+    $template = CP_PATH . 'templates/investigations-ui.php';
+    if ( file_exists( $template ) ) {
+        include $template;
+    } else {
+        echo '<div class="wrap"><h1>Error</h1><p>Missing template: <code>investigations-ui.php</code></p></div>';
+    }
 }
 
 /**
- * 3. AJAX HANDLERS
+ * AJAX: Start Investigation
  */
-add_action( 'wp_ajax_cp_ajax_start_investigation', 'cp_handle_ajax_start_investigation' );
-function cp_handle_ajax_start_investigation() {
-	check_ajax_referer( 'cp_investigation_nonce', 'security' );
-	if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Forbidden' );
+add_action( 'wp_ajax_cp_ajax_start_investigation', function() {
+    check_ajax_referer( 'cp_investigation_nonce', 'security' );
+    if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error();
 
-	$note = isset( $_POST['note'] ) ? $_POST['note'] : '';
-	$result = cp_start_investigation( get_current_user_id(), [ 'initial_note' => $note ] );
+    $note = isset($_POST['note']) ? sanitize_textarea_field($_POST['note']) : '';
+    $id = cp_start_investigation( get_current_user_id(), $note );
 
-	if ( is_wp_error( $result ) ) {
-		wp_send_json_error( $result->get_error_message() );
-	}
-	wp_send_json_success();
-}
+    if ( $id ) wp_send_json_success([ 'id' => $id ]);
+    wp_send_json_error([ 'message' => 'Could not start investigation.' ]);
+});
 
-add_action( 'wp_ajax_cp_ajax_end_investigation', 'cp_handle_ajax_end_investigation' );
-function cp_handle_ajax_end_investigation() {
-	check_ajax_referer( 'cp_investigation_nonce', 'security' );
-	if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Forbidden' );
+/**
+ * AJAX: End Investigation
+ */
+add_action( 'wp_ajax_cp_ajax_end_investigation', function() {
+    check_ajax_referer( 'cp_investigation_nonce', 'security' );
+    if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error();
 
-	$note = isset( $_POST['note'] ) ? $_POST['note'] : '';
-	$success = cp_end_investigation( get_current_user_id(), 'completed', $note );
+    $status = isset($_POST['status']) ? sanitize_text_field($_POST['status']) : 'completed';
+    $note   = isset($_POST['note']) ? sanitize_textarea_field($_POST['note']) : '';
 
-	if ( $success ) wp_send_json_success();
-	wp_send_json_error( 'No active investigation found.' );
-}
+    if ( cp_end_investigation( get_current_user_id(), $status, $note ) ) {
+        wp_send_json_success();
+    } else {
+        wp_send_json_error([ 'message' => 'No active investigation found.' ]);
+    }
+});

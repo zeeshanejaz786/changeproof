@@ -13,6 +13,7 @@
 			<textarea id="cp-final-note" class="large-text" placeholder="<?php _e( 'Final summary or conclusion...', 'changeproof' ); ?>"></textarea>
 			<p>
 				<button id="cp-btn-end-investigation" class="button button-primary" data-nonce="<?php echo wp_create_nonce('cp_investigation_nonce'); ?>">
+					<span class="dashicons dashicons-yes" style="margin-right:6px;"></span>
 					<?php _e( 'End Investigation', 'changeproof' ); ?>
 				</button>
 			</p>
@@ -26,6 +27,7 @@
 			<textarea id="cp-start-note" class="large-text" placeholder="<?php _e( 'e.g., Auditing security settings on landing pages.', 'changeproof' ); ?>"></textarea>
 			<p>
 				<button id="cp-btn-start-investigation" class="button button-primary" data-nonce="<?php echo wp_create_nonce('cp_investigation_nonce'); ?>">
+					<span class="dashicons dashicons-flag" style="margin-right:6px;"></span>
 					<?php _e( 'Start Recording', 'changeproof' ); ?>
 				</button>
 			</p>

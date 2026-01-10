@@ -3,70 +3,67 @@
  * Database Installation Logic
  */
 
-if ( ! defined( 'ABSPATH' ) ) {
-	exit;
-}
+if ( ! defined( 'ABSPATH' ) ) exit;
 
 /**
  * Creates or updates the custom tables for Changeproof.
- * Called via register_activation_hook in changeproof.php
  */
 function cp_install_database() {
-	global $wpdb;
+    global $wpdb;
 
-	$charset_collate = $wpdb->get_charset_collate();
+    require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 
-	// 1. wp_cp_investigations table
-	$table_investigations = $wpdb->prefix . 'cp_investigations';
-	
-	// 2. wp_cp_changes table
-	$table_changes = $wpdb->prefix . 'cp_changes';
+    $charset_collate = $wpdb->get_charset_collate();
 
-	/**
-	 * Schema for Investigations
-	 * Tracks who started an audit session and why.
-	 */
-	$sql_investigations = "CREATE TABLE $table_investigations (
-		id bigint(20) NOT NULL AUTO_INCREMENT,
-		user_id bigint(20) NOT NULL,
-		start_time datetime DEFAULT CURRENT_TIMESTAMP NOT NULL,
-		end_time datetime DEFAULT NULL,
-		status varchar(20) DEFAULT 'active' NOT NULL,
-		initial_note text NOT NULL,
-		final_note text DEFAULT NULL,
-		PRIMARY KEY  (id),
-		KEY user_id (user_id)
-	) $charset_collate;";
+    /**
+     * TABLE: cp_investigations
+     */
+    $table_investigations = $wpdb->prefix . 'cp_investigations';
 
-	/**
-	 * Schema for Changes
-	 * Stores the diff, the hash for threshold checks, and the intent reason.
-	 */
-	$sql_changes = "CREATE TABLE $table_changes (
-		id bigint(20) NOT NULL AUTO_INCREMENT,
-		investigation_id bigint(20) DEFAULT NULL,
-		user_id bigint(20) NOT NULL,
-		object_type varchar(50) NOT NULL,
-		object_id varchar(100) NOT NULL,
-		change_type varchar(50) NOT NULL,
-		before_data longtext DEFAULT NULL,
-		after_data longtext DEFAULT NULL,
-		reason text NOT NULL,
-		hash varchar(64) NOT NULL,
-		created_at datetime DEFAULT CURRENT_TIMESTAMP NOT NULL,
-		PRIMARY KEY  (id),
-		KEY investigation_id (investigation_id),
-		KEY user_id (user_id),
-		KEY object_id (object_id)
-	) $charset_collate;";
+    $sql_investigations = "
+        CREATE TABLE $table_investigations (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            user_id BIGINT UNSIGNED NOT NULL,
+            start_time DATETIME NOT NULL,
+            end_time DATETIME NULL,
+            status VARCHAR(20) NOT NULL DEFAULT 'active',
+            initial_note TEXT NULL,
+            final_note TEXT NULL,
+            PRIMARY KEY (id),
+            KEY user_id (user_id),
+            KEY status (status),
+            KEY start_time (start_time)
+        ) $charset_collate;
+    ";
 
-	require_once ABSPATH . 'wp-admin/includes/upgrade.php';
-	
-	// Execute the queries
-	dbDelta( $sql_investigations );
-	dbDelta( $sql_changes );
+    /**
+     * TABLE: cp_changes
+     */
+    $table_changes = $wpdb->prefix . 'cp_changes';
 
-	// Store version in options
-	add_option( 'cp_db_version', CP_VERSION );
-	update_option( 'cp_db_version', CP_VERSION );
+    $sql_changes = "
+        CREATE TABLE $table_changes (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            investigation_id BIGINT UNSIGNED NULL,
+            user_id BIGINT UNSIGNED NOT NULL,
+            object_type VARCHAR(50) NOT NULL,
+            object_id VARCHAR(191) NOT NULL,
+            change_type VARCHAR(50) NOT NULL DEFAULT 'update',
+            before_data LONGTEXT NULL,
+            after_data LONGTEXT NULL,
+            reason TEXT NULL,
+            hash CHAR(32) NULL,
+            created_at DATETIME NOT NULL,
+            PRIMARY KEY (id),
+            KEY user_id (user_id),
+            KEY investigation_id (investigation_id),
+            KEY object_type (object_type),
+            KEY created_at (created_at)
+        ) $charset_collate;
+    ";
+
+    dbDelta( $sql_investigations );
+    dbDelta( $sql_changes );
+
+    update_option( 'cp_db_version', CP_VERSION );
 }

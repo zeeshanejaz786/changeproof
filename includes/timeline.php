@@ -8,8 +8,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 /**
- * Renders the main Timeline page.
- * Called by the menu registration in changeproof.php
+ * -------------------------------------------------
+ * Render Timeline Page
+ * -------------------------------------------------
  */
 function cp_render_timeline_page() {
 	if ( ! current_user_can( 'manage_options' ) ) {
@@ -17,42 +18,83 @@ function cp_render_timeline_page() {
 	}
 
 	global $wpdb;
-	$table_changes = $wpdb->prefix . 'cp_changes';
+
+	$table_changes        = $wpdb->prefix . 'cp_changes';
+	$table_investigations = $wpdb->prefix . 'cp_investigations';
 
 	/**
-	 * 1. Query last 100 changes
-	 * We join with the users table to get display names efficiently.
+	 * Pull last 100 changes with:
+	 * - user display name
+	 * - investigation status
 	 */
 	$query = "
-		SELECT c.*, u.display_name 
-		FROM $table_changes c
+		SELECT 
+			c.*,
+			u.display_name,
+			i.status AS investigation_status
+		FROM {$table_changes} c
 		LEFT JOIN {$wpdb->users} u ON c.user_id = u.ID
-		ORDER BY c.created_at DESC 
+		LEFT JOIN {$table_investigations} i ON c.investigation_id = i.id
+		ORDER BY c.created_at DESC
 		LIMIT 100
 	";
 
 	$changes = $wpdb->get_results( $query );
 
-	// 2. Include the Template
-	// We pass $changes to the template file.
 	include CP_PATH . 'templates/timeline-table.php';
 }
 
 /**
- * Helper to generate a simple "Diff" excerpt for the timeline.
- * Since we aren't using a heavy diffing library, we show a snapshot.
+ * -------------------------------------------------
+ * Normalize change type for UI
+ * -------------------------------------------------
+ */
+function cp_get_change_label( $change_type ) {
+	$map = [
+		'activate'   => __( 'Activated', 'changeproof' ),
+		'deactivate' => __( 'Deactivated', 'changeproof' ),
+		'update'     => __( 'Updated', 'changeproof' ),
+	];
+
+	return $map[ $change_type ] ?? ucfirst( $change_type );
+}
+
+/**
+ * -------------------------------------------------
+ * UI Icon helper (Dashicons)
+ * -------------------------------------------------
+ */
+function cp_get_change_icon( $change_type ) {
+	$icons = [
+		'activate'   => 'dashicons-yes-alt',
+		'deactivate' => 'dashicons-dismiss',
+		'update'     => 'dashicons-edit',
+	];
+
+	return $icons[ $change_type ] ?? 'dashicons-warning';
+}
+
+/**
+ * -------------------------------------------------
+ * Safe Data Excerpt (JSON-aware)
+ * -------------------------------------------------
  */
 function cp_get_data_excerpt( $data ) {
 	if ( empty( $data ) ) {
-		return '<em>' . __( 'None / Empty', 'changeproof' ) . '</em>';
+		return '<em>' . esc_html__( 'No data recorded', 'changeproof' ) . '</em>';
 	}
 
-	// Strip tags to show text-only excerpt
-	$clean = wp_strip_all_tags( $data );
-	
-	if ( strlen( $clean ) > 200 ) {
-		return esc_html( substr( $clean, 0, 200 ) ) . '...';
+	$decoded = json_decode( $data, true );
+
+	if ( is_array( $decoded ) ) {
+		$text = implode( ' | ', array_map( 'sanitize_text_field', $decoded ) );
+	} else {
+		$text = wp_strip_all_tags( $data );
 	}
 
-	return esc_html( $clean );
+	if ( strlen( $text ) > 160 ) {
+		$text = substr( $text, 0, 160 ) . '…';
+	}
+
+	return esc_html( $text );
 }
