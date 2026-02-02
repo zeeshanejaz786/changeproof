@@ -86,6 +86,7 @@ function cp_capture_post_change( $post_id, $post, $update ) {
     }
 
     // Fetch intent + investigation
+    require_once plugin_dir_path( __FILE__ ) . 'includes/investigations.php';
     $intent        = get_user_meta( $user_id, '_cp_pending_intent', true );
     $investigation = cp_get_active_investigation_id( $user_id );
 
